@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebRTC Screen Sharing</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
+</head>
+<body class="container mt-5">
+
+  <h1 class="text-center mb-4">WebRTC Screen Share</h1>
+
+  <div class="d-flex justify-content-center mb-3">
+    <button id="startScreenShare" class="btn btn-primary me-2">Start Screen Share</button>
+    <button id="startPlayback" class="btn btn-success">Start Playback</button>
+  </div>
+
+  <div class="d-flex justify-content-center">
+    <video
+      id="remoteVideo"
+      class="border rounded"
+      autoplay
+      playsinline
+      controls
+      muted
+      style="width: 100%; max-width: 1000px; height: 500px; border: 1px solid black;"
+    ></video>
+  </div>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionId = urlParams.get('session_id');
+
+    if (!sessionId) {
+      alert("Session ID is required in the URL parameters");
+      throw new Error("Session ID not found");
+    }
+
+    const startScreenShareButton = document.getElementById("startScreenShare");
+    const startPlaybackButton = document.getElementById("startPlayback");
+    const remoteVideo = document.getElementById("remoteVideo");
+
+    let localConnection, remoteConnection, signalingSocket;
+    let screenStream;
+    let clientId;
+    let waitingForAnswer = false;
+    let userHasInteracted = false;
+    let receivedStream;
+
+    signalingSocket = new WebSocket(`wss://192.168.0.13:3000/?session_id=${sessionId}`);
+
+    signalingSocket.onopen = () => {
+      console.log("Connected to the signaling server");
+      signalingSocket.send(JSON.stringify({ type: "join" }));
+    };
+
+    signalingSocket.onmessage = (message) => {
+      const data = JSON.parse(message.data);
+      console.log(`Received message: ${data.type}`);
+
+      if (data.type === "join") {
+        clientId = data.clientId;
+      }
+
+      switch (data.type) {
+        case "offer":
+          console.log("Received offer");
+          handleOffer(data.offer);
+          break;
+        case "answer":
+          console.log("Received answer");
+          handleAnswer(data.answer);
+          break;
+        case "candidate":
+          console.log("Received candidate");
+          handleCandidate(data.candidate);
+          break;
+      }
+    };
+
+    startScreenShareButton.onclick = async () => {
+      if (waitingForAnswer) {
+        console.warn("Already waiting for an answer. Cannot start screen share again.");
+        return;
+      }
+
+      try {
+        screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+        });
+        console.log("Screen Stream:", screenStream);
+        console.log("Screen sharing started");
+        createOffer();
+      } catch (error) {
+        console.error("Error accessing display media:", error);
+      }
+    };
+
+    startPlaybackButton.onclick = () => {
+      userHasInteracted = true;
+      console.log("User has interacted, playback is now allowed.");
+      if (receivedStream) {
+        remoteVideo.srcObject = receivedStream;
+        remoteVideo.play().catch((error) => {
+          console.error("Error playing received stream:", error);
+        });
+      } else {
+        console.log("No received stream yet, waiting...");
+      }
+    };
+
+    function createOffer() {
+      localConnection = new RTCPeerConnection();
+
+      localConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          signalingSocket.send(
+            JSON.stringify({
+              type: "candidate",
+              candidate: event.candidate,
+              target: "peer2",
+            })
+          );
+        }
+      };
+
+      screenStream.getTracks().forEach((track) => localConnection.addTrack(track, screenStream));
+
+      localConnection
+        .createOffer()
+        .then((offer) => localConnection.setLocalDescription(offer))
+        .then(() => {
+          console.log("Offer created and sent");
+          waitingForAnswer = true;
+          signalingSocket.send(
+            JSON.stringify({
+              type: "offer",
+              offer: localConnection.localDescription,
+              target: "peer2",
+            })
+          );
+        })
+        .catch((error) => {
+          console.error("Error creating offer:", error);
+        });
+    }
+
+    function handleOffer(offer) {
+      if (remoteConnection) {
+        console.warn("Remote connection already exists. Ignoring the new offer.");
+        return;
+      }
+
+      remoteConnection = new RTCPeerConnection();
+
+      remoteConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          signalingSocket.send(
+            JSON.stringify({
+              type: "candidate",
+              candidate: event.candidate,
+              target: clientId,
+            })
+          );
+        }
+      };
+
+      remoteConnection.ontrack = (event) => {
+        console.log("Remote track received:", event.track);
+
+        if (event.track.kind === "video") {
+          receivedStream = new MediaStream();
+          receivedStream.addTrack(event.track);
+          console.log("Received video stream. Waiting for user interaction.");
+
+          if (userHasInteracted) {
+            remoteVideo.srcObject = receivedStream;
+            remoteVideo.play().catch((error) => {
+              console.error("Error playing received stream:", error);
+            });
+          } else {
+            console.log("User hasn't interacted yet, waiting for interaction.");
+          }
+        }
+      };
+
+      remoteConnection
+        .setRemoteDescription(new RTCSessionDescription(offer))
+        .then(() => remoteConnection.createAnswer())
+        .then((answer) => remoteConnection.setLocalDescription(answer))
+        .then(() => {
+          console.log("Answer created and sent");
+          signalingSocket.send(
+            JSON.stringify({
+              type: "answer",
+              answer: remoteConnection.localDescription,
+              target: clientId,
+            })
+          );
+        })
+        .catch((error) => {
+          console.error("Error handling offer:", error);
+        });
+    }
+
+    function handleAnswer(answer) {
+      if (waitingForAnswer) {
+        localConnection
+          .setRemoteDescription(new RTCSessionDescription(answer))
+          .then(() => {
+            console.log("Received answer and set remote description");
+            waitingForAnswer = false;
+          })
+          .catch((error) => {
+            console.error("Error setting remote description:", error);
+          });
+      } else {
+        console.warn("Received answer but not waiting for one, ignoring.");
+      }
+    }
+
+    function handleCandidate(candidate) {
+      const rtcCandidate = new RTCIceCandidate(candidate);
+      if (localConnection) {
+        localConnection.addIceCandidate(rtcCandidate).catch((error) => {
+          console.error("Error adding local ICE candidate:", error);
+        });
+      }
+
+      if (remoteConnection) {
+        remoteConnection.addIceCandidate(rtcCandidate).catch((error) => {
+          console.error("Error adding remote ICE candidate:", error);
+        });
+      }
+    }
+  </script>
+</body>
+</html>
