@@ -33,6 +33,7 @@ Need to figure out how to make multiple viewers in a single session
 
     ```On terminal
     node server.js
+    http-server -S -C ./app.example.com+3.pem -K ./app.example.com+3-key.pem --cors
     ```
 
 5. Open `https://{your-wifi-IP}/index.html?session_id={Whatever-ID-you-want}` to get a dynamically assigned WebSocket server for the screen-sharing session. 
