@@ -14,20 +14,20 @@ Need to figure out how to make multiple viewers in a single session
 
 
  ```On terminal
-sudo apt update
-sudo apt install snapd
-sudo snap install node --classic
-node --version **Check version for node**  
-npm --version **Check version for npm**
+    sudo apt update
+    sudo apt install snapd
+    sudo snap install node --classic
+    node --version **Check version for node**  
+    npm --version **Check version for npm**
 
-mkdir screenshare
-cd screenshare
-npm init -y
-npm install socket.io
-npm install express
+    mkdir screenshare
+    cd screenshare
+    npm init -y
+    npm install socket.io
+    npm install express
 
-touch server.js
-touch index.html
+    touch server.js
+    touch index.html
  ```
 4. Run the port allocation server:
 
