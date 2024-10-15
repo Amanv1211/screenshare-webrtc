@@ -35,7 +35,7 @@ Need to figure out how to make multiple viewers in a single session
     node server.js
     ```
 
-5. Open `https://192.168.0.13:8080/index.php?session_id={Whatever-ID-you-want}` to get a dynamically assigned WebSocket server for the screen-sharing session. 
+5. Open `https://{your-wifi-IP}/index.html?session_id={Whatever-ID-you-want}` to get a dynamically assigned WebSocket server for the screen-sharing session. 
 6. Open `index.html` in the browser to start screen sharing.
 
 ## Folder Structure
