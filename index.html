@@ -47,7 +47,7 @@
     let userHasInteracted = false;
     let receivedStream;
 
-    signalingSocket = new WebSocket(`wss://192.168.0.13:3000/?session_id=${sessionId}`);
+    signalingSocket = new WebSocket(`wss://{your_WIFI_IP}:3000/?session_id=${sessionId}`);
 
     signalingSocket.onopen = () => {
       console.log("Connected to the signaling server");
