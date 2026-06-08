@@ -1,6 +1,7 @@
 const fs = require('fs');
 const https = require('https');
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const WebSocket = require('ws');
 const { networkInterfaces } = require('os');
 const { randomBytes } = require('crypto');
@@ -12,34 +13,12 @@ const serverOptions = {
 
 const app = express();
 
-// ── Rate limiting (no external dependency) ───────────────────
-const ipLog = new Map();
-// Clean up stale entries every 5 minutes
-setInterval(() => {
-    const cutoff = Date.now() - 60_000;
-    for (const [ip, entry] of ipLog) {
-        if (entry.windowStart < cutoff) ipLog.delete(ip);
-    }
-}, 5 * 60_000);
+// ── Rate limiting ─────────────────────────────────────────────
+const limiterDefault = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false });
+const limiterApi     = rateLimit({ windowMs: 60_000, max: 30, standardHeaders: true, legacyHeaders: false });
+const limiterNewRoom = rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false });
 
-function rateLimit(maxPerMinute) {
-    return (req, res, next) => {
-        const ip = req.ip || req.socket.remoteAddress || 'unknown';
-        const now = Date.now();
-        const entry = ipLog.get(ip);
-        if (!entry || now - entry.windowStart > 60_000) {
-            ipLog.set(ip, { windowStart: now, count: 1 });
-            return next();
-        }
-        if (entry.count >= maxPerMinute) {
-            return res.status(429).json({ error: 'Too many requests' });
-        }
-        entry.count++;
-        next();
-    };
-}
-
-// WebSocket connection rate limiting
+// WebSocket connection rate limiting (express-rate-limit doesn't cover WS upgrades)
 const wsLog = new Map();
 setInterval(() => {
     const cutoff = Date.now() - 60_000;
@@ -55,13 +34,13 @@ function allowWsConnection(ip) {
         wsLog.set(ip, { windowStart: now, count: 1 });
         return true;
     }
-    if (entry.count >= 20) return false; // 20 WS connections per IP per minute
+    if (entry.count >= 20) return false;
     entry.count++;
     return true;
 }
 
 // ── Routes (explicit only — no express.static to avoid exposing certs) ──
-app.get('/api/info', rateLimit(30), (req, res) => {
+app.get('/api/info', limiterApi, (req, res) => {
     const nets = networkInterfaces();
     let localIp = 'localhost';
     for (const iface of Object.values(nets)) {
@@ -73,12 +52,12 @@ app.get('/api/info', rateLimit(30), (req, res) => {
     res.json({ localIp, port: 3000 });
 });
 
-app.get('/api/new-room', rateLimit(10), (req, res) => {
+app.get('/api/new-room', limiterNewRoom, (req, res) => {
     res.json({ roomId: randomBytes(3).toString('hex') });
 });
 
-app.get('/', rateLimit(60), (req, res) => res.sendFile(__dirname + '/home.html'));
-app.get('/room', rateLimit(60), (req, res) => res.sendFile(__dirname + '/room.html'));
+app.get('/', limiterDefault, (req, res) => res.sendFile(__dirname + '/home.html'));
+app.get('/room', limiterDefault, (req, res) => res.sendFile(__dirname + '/room.html'));
 
 // ── WebSocket signaling ──────────────────────────────────────
 const httpsServer = https.createServer(serverOptions, app);
