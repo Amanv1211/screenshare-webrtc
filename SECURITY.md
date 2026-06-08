@@ -2,20 +2,21 @@
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+| Version | Supported |
+|---------|-----------|
+| 2.x     | Yes       |
+| 1.x     | No        |
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+## Known Security Considerations
+
+This project is intended for **local network / LAN use**. Before deploying to a public server, be aware of:
+
+- **Self-signed SSL certificate** — the included cert is for local development only. Replace it with a trusted certificate (e.g. Let's Encrypt) for any public deployment.
+- **No authentication** — anyone with the room link can join. There is no password or access control. Add auth middleware in `server.js` if needed.
+- **Max 5 peers per room** — enforced server-side, but there is no rate limiting or DDoS protection. Add rate limiting (e.g. `express-rate-limit`) for public deployments.
+- **WebRTC is peer-to-peer** — media streams travel directly between browsers and never touch the server. The server only relays signaling messages (offer/answer/ICE candidates).
+- **`.pem` files** — SSL private key files are excluded from git via `.gitignore`. Never commit them.
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability.
-
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+If you find a security issue, please open a [GitHub Issue](../../issues) or email the maintainer directly. Include steps to reproduce and the potential impact.
