@@ -38,7 +38,8 @@ export default function Room() {
       return
     }
 
-    const ws = new WebSocket(`wss://${window.location.host}?session_id=${encodeURIComponent(sessionId)}`)
+    const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    const ws = new WebSocket(`${wsProto}://${window.location.host}?session_id=${encodeURIComponent(sessionId)}`)
     wsRef.current = ws
 
     function send(data) {

@@ -21,7 +21,7 @@ export default function Home() {
 
   function roomUrl(id) {
     const params = new URLSearchParams({ session_id: id })
-    return `https://${serverHost}/room?${params}`
+    return `${window.location.protocol}//${serverHost}/room?${params}`
   }
 
   async function createRoom() {

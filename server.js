@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const https = require('https');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
@@ -9,10 +10,9 @@ const { randomBytes } = require('crypto');
 
 const DIST = path.join(__dirname, 'client', 'dist');
 
-const serverOptions = {
-    cert: fs.readFileSync('./app.example.com+3.pem'),
-    key: fs.readFileSync('./app.example.com+3-key.pem'),
-};
+const CERT_FILE = './app.example.com+3.pem';
+const KEY_FILE  = './app.example.com+3-key.pem';
+const useHttps  = fs.existsSync(CERT_FILE) && fs.existsSync(KEY_FILE);
 
 const app = express();
 
@@ -65,9 +65,12 @@ app.get('/api/new-room', limiterNewRoom, (req, res) => {
 app.get('/', limiterDefault, (req, res) => res.sendFile(path.join(DIST, 'index.html')));
 app.get('/room', limiterDefault, (req, res) => res.sendFile(path.join(DIST, 'index.html')));
 
-// ── WebSocket signaling ──────────────────────────────────────
-const httpsServer = https.createServer(serverOptions, app);
-const wss = new WebSocket.Server({ server: httpsServer });
+// ── Server (HTTPS if certs present, HTTP fallback for localhost dev) ──
+const server = useHttps
+    ? https.createServer({ cert: fs.readFileSync(CERT_FILE), key: fs.readFileSync(KEY_FILE) }, app)
+    : http.createServer(app);
+
+const wss = new WebSocket.Server({ server });
 
 const sessions = Object.create(null); // null prototype prevents prototype pollution
 const MAX_PEERS = 5;
@@ -143,6 +146,8 @@ wss.on('connection', (ws, req) => {
     });
 });
 
-httpsServer.listen(3000, '0.0.0.0', () => {
-    console.log('Server running → https://localhost:3000');
+server.listen(3000, '0.0.0.0', () => {
+    const proto = useHttps ? 'https' : 'http';
+    console.log(`Server running → ${proto}://localhost:3000`);
+    if (!useHttps) console.log('  ⚠  No SSL certs found — running HTTP (localhost only)');
 });
