@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VideoCall — Room</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      height: 100dvh;
+      background: #0d0d16;
+      color: #eee;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+
+    /* ── Top bar ── */
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 18px;
+      background: rgba(0,0,0,0.5);
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      flex-shrink: 0; gap: 10px;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .brand { font-weight: 700; font-size: 0.95rem; }
+    .badge {
+      font-size: 0.72rem; padding: 3px 10px;
+      border-radius: 20px; font-weight: 500;
+    }
+    .badge-room  { background: rgba(255,255,255,0.08); color: #aaa; }
+    .badge-wait  { background: #1e3a5f; color: #60a5fa; }
+    .badge-ready { background: #14532d; color: #4ade80; }
+    .badge-err   { background: #450a0a; color: #f87171; }
+    .badge-call  { background: #14532d; color: #4ade80; }
+    .badge-info  { background: #2d1b69; color: #a78bfa; }
+    .badge-peers { background: rgba(255,255,255,0.06); color: #888; }
+
+    .share-btn {
+      font-size: 0.75rem;
+      background: rgba(79,110,247,0.15);
+      border: 1px solid rgba(79,110,247,0.35);
+      color: #818cf8; padding: 5px 14px;
+      border-radius: 20px; cursor: pointer; transition: background 0.2s;
+      white-space: nowrap;
+    }
+    .share-btn:hover { background: rgba(79,110,247,0.3); }
+    .share-btn.copied { background: rgba(34,197,94,0.2); color: #4ade80; border-color: #4ade80; }
+
+    /* ── Video area ── */
+    .video-area {
+      flex: 1; position: relative; min-height: 0; overflow: hidden;
+    }
+
+    /* Remote video grid */
+    #videoGrid {
+      display: grid;
+      gap: 6px;
+      padding: 8px;
+      height: 100%;
+      align-content: start;
+    }
+    /* Grid column count set by JS based on peer count */
+
+    .video-tile {
+      position: relative;
+      background: #111;
+      border-radius: 10px;
+      overflow: hidden;
+      aspect-ratio: 16/9;
+    }
+    .video-tile video {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+    }
+    .tile-label {
+      position: absolute; bottom: 8px; left: 8px;
+      background: rgba(0,0,0,0.6); color: #ddd;
+      font-size: 0.72rem; padding: 3px 9px; border-radius: 20px;
+      pointer-events: none;
+    }
+    .tile-muted {
+      position: absolute; top: 8px; right: 8px;
+      background: rgba(239,68,68,0.75); color: #fff;
+      font-size: 0.68rem; padding: 2px 8px; border-radius: 20px;
+      display: none;
+    }
+
+    /* Local video — always PiP over grid */
+    #localWrap {
+      position: absolute; bottom: 14px; right: 14px;
+      width: 180px; z-index: 10;
+      border-radius: 10px; overflow: hidden;
+      border: 2px solid rgba(255,255,255,0.25);
+      background: #1a1a1a; cursor: pointer;
+    }
+    #localWrap:hover { border-color: rgba(255,255,255,0.55); }
+    #localVideo {
+      width: 100%; aspect-ratio: 16/9;
+      object-fit: cover; display: block; background: #1a1a1a;
+    }
+    #localLabel {
+      position: absolute; bottom: 5px; left: 7px;
+      background: rgba(0,0,0,0.55); color: #ccc;
+      font-size: 0.65rem; padding: 2px 7px; border-radius: 12px;
+    }
+    #localNoVideoMsg {
+      display: none; /* shown when no local video */
+      position: absolute; inset: 0;
+      align-items: center; justify-content: center;
+      background: #1a1a1a; font-size: 0.72rem; color: #555; text-align: center;
+      padding: 4px;
+    }
+
+    /* Waiting / empty state overlay */
+    #waitOverlay {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px;
+      background: #0d0d16; z-index: 5;
+    }
+    #waitOverlay .pulse-ring {
+      width: 64px; height: 64px; border-radius: 50%;
+      border: 2px solid rgba(79,110,247,0.5);
+      background: rgba(79,110,247,0.1);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 0.8; }
+      50% { transform: scale(1.15); opacity: 0.4; }
+    }
+    #waitOverlay p { color: #666; font-size: 0.9rem; }
+
+    /* Screen share badge */
+    #screenBanner {
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      background: rgba(79,110,247,0.9); color: #fff;
+      font-size: 0.72rem; padding: 4px 14px; border-radius: 20px;
+      display: none; z-index: 8;
+    }
+
+    /* Error / info toast */
+    #toast {
+      position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+      background: #450a0a; color: #f87171; border: 1px solid rgba(239,68,68,0.3);
+      padding: 10px 20px; border-radius: 10px; font-size: 0.82rem;
+      display: none; z-index: 20; text-align: center; max-width: 380px;
+    }
+
+    /* ── Controls bar ── */
+    .controls {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      padding: 14px 16px;
+      background: rgba(0,0,0,0.55);
+      border-top: 1px solid rgba(255,255,255,0.06);
+      flex-shrink: 0; flex-wrap: wrap;
+    }
+
+    #btnJoinCall {
+      padding: 12px 36px; border-radius: 30px;
+      background: #4f6ef7; border: none; color: #fff;
+      font-size: 0.95rem; font-weight: 700; cursor: pointer;
+    }
+    #btnJoinCall:hover { opacity: 0.88; }
+    #btnJoinCall:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .cb {
+      display: flex; flex-direction: column; align-items: center; gap: 3px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 12px; padding: 9px 14px;
+      cursor: pointer; color: #eee; min-width: 70px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .cb:hover { background: rgba(255,255,255,0.14); }
+    .cb .icon { font-size: 1.25rem; line-height: 1.2; }
+    .cb .lbl  { font-size: 0.68rem; color: #999; white-space: nowrap; }
+    .cb.off   { background: rgba(239,68,68,0.18); border-color: rgba(239,68,68,0.4); }
+    .cb.off .lbl { color: #f87171; }
+    .cb.on-blue { background: rgba(79,110,247,0.2); border-color: rgba(79,110,247,0.5); }
+    .cb.on-blue .lbl { color: #818cf8; }
+
+    #ctrlGroup { display: none; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+
+    .end-btn {
+      padding: 12px 28px; border-radius: 30px;
+      background: #dc2626; border: none; color: #fff;
+      font-size: 0.9rem; font-weight: 700; cursor: pointer;
+    }
+    .end-btn:hover { opacity: 0.85; }
+  </style>
+</head>
+<body>
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="brand">🎥 VideoCall</span>
+      <span class="badge badge-room">Room: <strong id="roomIdText">—</strong></span>
+      <span class="badge badge-peers" id="peerCountBadge">0 / 5</span>
+      <span class="badge badge-wait" id="statusBadge">Connecting…</span>
+    </div>
+    <button class="share-btn" id="shareLinkBtn">Copy Invite Link</button>
+  </div>
+
+  <!-- Video area -->
+  <div class="video-area">
+    <!-- Waiting overlay -->
+    <div id="waitOverlay">
+      <div class="pulse-ring"></div>
+      <p id="waitMsg">Joining room…</p>
+    </div>
+
+    <!-- Remote video grid (populated dynamically) -->
+    <div id="videoGrid"></div>
+
+    <!-- Local PiP video -->
+    <div id="localWrap" title="Click to toggle camera">
+      <video id="localVideo" autoplay playsinline muted></video>
+      <div id="localNoVideoMsg">No camera</div>
+      <span id="localLabel">You</span>
+    </div>
+
+    <!-- Overlays -->
+    <div id="screenBanner">Sharing Screen</div>
+    <div id="toast"></div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button id="btnJoinCall">Join Call</button>
+
+    <div id="ctrlGroup">
+      <button class="cb" id="btnMic">
+        <span class="icon" id="micIcon">🎤</span>
+        <span class="lbl"  id="micLbl">Mic On</span>
+      </button>
+      <button class="cb" id="btnCam">
+        <span class="icon" id="camIcon">📷</span>
+        <span class="lbl"  id="camLbl">Cam On</span>
+      </button>
+      <button class="cb" id="btnScreen">
+        <span class="icon" id="screenIcon">🖥</span>
+        <span class="lbl"  id="screenLbl">Share Screen</span>
+      </button>
+      <button class="end-btn" id="btnEnd">End Call</button>
+    </div>
+  </div>
+
+  <script>
+    // ── Setup ───────────────────────────────────────────────────
+    const params    = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session_id');
+    if (!sessionId) { alert('No session_id in URL.'); throw new Error(); }
+    document.getElementById('roomIdText').textContent = sessionId;
+
+    // ── DOM ─────────────────────────────────────────────────────
+    const localVideo    = document.getElementById('localVideo');
+    const localNoVid    = document.getElementById('localNoVideoMsg');
+    const videoGrid     = document.getElementById('videoGrid');
+    const waitOverlay   = document.getElementById('waitOverlay');
+    const waitMsg       = document.getElementById('waitMsg');
+    const statusBadge   = document.getElementById('statusBadge');
+    const peerCountEl   = document.getElementById('peerCountBadge');
+    const screenBanner  = document.getElementById('screenBanner');
+    const toastEl       = document.getElementById('toast');
+    const btnJoinCall   = document.getElementById('btnJoinCall');
+    const ctrlGroup     = document.getElementById('ctrlGroup');
+    const btnMic        = document.getElementById('btnMic');
+    const btnCam        = document.getElementById('btnCam');
+    const btnScreen     = document.getElementById('btnScreen');
+    const btnEnd        = document.getElementById('btnEnd');
+
+    // ── State ───────────────────────────────────────────────────
+    let myPeerId    = null;
+    let localStream = null;   // camera + mic (may be null)
+    let screenStream = null;
+    let isMuted     = false;
+    let isCameraOff = false;
+    let isScreenOn  = false;
+    let hasVideo    = false;
+    let hasAudio    = false;
+    // connections: peerId → { pc, polite, makingOffer }
+    const connections  = {};
+    // remote video elements: peerId → <video>
+    const remoteVideos = {};
+
+    const ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+    // ── Helpers ─────────────────────────────────────────────────
+    function setStatus(text, cls) {
+      statusBadge.textContent = text;
+      statusBadge.className   = `badge ${cls}`;
+    }
+
+    function showToast(msg, isError = true) {
+      toastEl.textContent = msg;
+      toastEl.style.background = isError ? '#450a0a' : '#14532d';
+      toastEl.style.color = isError ? '#f87171' : '#4ade80';
+      toastEl.style.display = 'block';
+      clearTimeout(toastEl._timer);
+      toastEl._timer = setTimeout(() => toastEl.style.display = 'none', 4000);
+    }
+
+    function updatePeerCount() {
+      const n = Object.keys(connections).length + 1; // include self
+      peerCountEl.textContent = `${n} / 5`;
+    }
+
+    // ── Share link ───────────────────────────────────────────────
+    document.getElementById('shareLinkBtn').onclick = function() {
+      navigator.clipboard.writeText(window.location.href).then(() => {
+        this.textContent = 'Copied!';
+        this.classList.add('copied');
+        setTimeout(() => { this.textContent = 'Copy Invite Link'; this.classList.remove('copied'); }, 2000);
+      });
+    };
+
+    // ── Video grid management ────────────────────────────────────
+    function updateGridCols() {
+      const n = Object.keys(remoteVideos).length;
+      if (n === 0) {
+        videoGrid.style.gridTemplateColumns = '1fr';
+      } else if (n === 1) {
+        videoGrid.style.gridTemplateColumns = '1fr';
+      } else if (n <= 4) {
+        videoGrid.style.gridTemplateColumns = 'repeat(2, 1fr)';
+      } else {
+        videoGrid.style.gridTemplateColumns = 'repeat(3, 1fr)';
+      }
+    }
+
+    function addRemoteTile(peerId) {
+      if (remoteVideos[peerId]) return;
+      const tile = document.createElement('div');
+      tile.className = 'video-tile';
+      tile.id = `tile-${peerId}`;
+
+      const vid = document.createElement('video');
+      vid.autoplay = true;
+      vid.playsInline = true;
+
+      const lbl = document.createElement('span');
+      lbl.className = 'tile-label';
+      lbl.textContent = `Peer ${peerId}`;
+
+      tile.append(vid, lbl);
+      videoGrid.appendChild(tile);
+      remoteVideos[peerId] = vid;
+      updateGridCols();
+      updatePeerCount();
+    }
+
+    function removeRemoteTile(peerId) {
+      document.getElementById(`tile-${peerId}`)?.remove();
+      delete remoteVideos[peerId];
+      updateGridCols();
+      updatePeerCount();
+      // If no remotes left, show wait overlay
+      if (Object.keys(remoteVideos).length === 0) {
+        waitMsg.textContent = 'Waiting for others to join…';
+        waitOverlay.style.display = 'flex';
+      }
+    }
+
+    // ── Signaling ────────────────────────────────────────────────
+    const ws = new WebSocket(`wss://${window.location.hostname}:3000/?session_id=${sessionId}`);
+    const send = obj => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(obj));
+
+    ws.onopen  = () => setStatus('Connected', 'badge badge-info');
+    ws.onerror = () => setStatus('WS error', 'badge badge-err');
+    ws.onclose = () => setStatus('Disconnected', 'badge badge-err');
+
+    ws.onmessage = async ({ data }) => {
+      const msg = JSON.parse(data);
+      switch (msg.type) {
+        case 'init':
+          myPeerId = msg.peerId;
+          setStatus('Waiting for peers', 'badge badge-wait');
+          waitMsg.textContent = msg.peers.length === 0
+            ? 'Waiting for others to join…'
+            : 'Others are here — click "Join Call"';
+          // Connect to every existing peer
+          for (const pid of msg.peers) {
+            addRemoteTile(pid);
+            await initiateConnection(pid);
+          }
+          break;
+
+        case 'peer_joined':
+          // A new peer joined — they will send us an offer, just prepare tile
+          addRemoteTile(msg.peerId);
+          setStatus(`Peer joined`, 'badge badge-ready');
+          waitMsg.textContent = 'New peer joined — connecting…';
+          break;
+
+        case 'peer_left':
+          removeRemoteTile(msg.peerId);
+          closeConnection(msg.peerId);
+          showToast('A peer left the room', false);
+          break;
+
+        case 'offer':
+          await handleRemoteOffer(msg.from, msg.offer);
+          break;
+
+        case 'answer':
+          await handleRemoteAnswer(msg.from, msg.answer);
+          break;
+
+        case 'candidate':
+          await handleCandidate(msg.from, msg.candidate);
+          break;
+
+        case 'error':
+          showToast(msg.message);
+          setStatus('Error', 'badge badge-err');
+          break;
+      }
+    };
+
+    // ── Join Call ────────────────────────────────────────────────
+    btnJoinCall.onclick = async () => {
+      btnJoinCall.disabled = true;
+
+      // Try camera+mic → mic only → no media
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        hasVideo = true; hasAudio = true;
+      } catch {
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+          hasVideo = false; hasAudio = true;
+          showToast('No camera access — joining with audio only', false);
+        } catch {
+          localStream = null;
+          hasVideo = false; hasAudio = false;
+          showToast('No camera or mic access — you can still share your screen', false);
+        }
+      }
+
+      if (localStream) {
+        localVideo.srcObject = localStream;
+        if (!hasVideo) { localNoVid.style.display = 'flex'; }
+      } else {
+        localNoVid.style.display = 'flex';
+      }
+
+      // Add local tracks to any already-created peer connections
+      if (localStream) {
+        for (const { pc } of Object.values(connections)) {
+          localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+        }
+      }
+
+      btnJoinCall.style.display = 'none';
+      ctrlGroup.style.display   = 'flex';
+      setStatus('In call', 'badge badge-call');
+
+      if (Object.keys(remoteVideos).length === 0) {
+        waitMsg.textContent = 'Waiting for others to join…';
+      } else {
+        waitOverlay.style.display = 'none';
+      }
+    };
+
+    // ── WebRTC: create a connection and send offer ───────────────
+    async function initiateConnection(remotePeerId) {
+      const { pc } = buildPeerConnection(remotePeerId, false /* we are impolite = initiator */);
+
+      if (localStream) {
+        localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+      } else {
+        // No local media yet — add recvonly transceivers so we can still receive
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+        pc.addTransceiver('video', { direction: 'recvonly' });
+      }
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      send({ type: 'offer', to: remotePeerId, offer: pc.localDescription });
+    }
+
+    // ── WebRTC: receive an offer and send answer ─────────────────
+    async function handleRemoteOffer(fromPeerId, offer) {
+      // Existing peer wasn't initiated by us — we are polite
+      if (!connections[fromPeerId]) {
+        buildPeerConnection(fromPeerId, true /* we are polite = responder */);
+        addRemoteTile(fromPeerId);
+      }
+      const conn = connections[fromPeerId];
+      const { pc, polite } = conn;
+
+      const offerCollision = pc.signalingState !== 'stable' || conn.makingOffer;
+      if (!polite && offerCollision) return; // impolite ignores collision
+      if (polite && offerCollision) {
+        await Promise.all([
+          pc.setLocalDescription({ type: 'rollback' }),
+          pc.setRemoteDescription(new RTCSessionDescription(offer)),
+        ]);
+      } else {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      }
+
+      if (offer.type === 'offer') {
+        // Add tracks before answering
+        if (localStream && pc.getSenders().length === 0) {
+          localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+        }
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        send({ type: 'answer', to: fromPeerId, answer: pc.localDescription });
+      }
+    }
+
+    async function handleRemoteAnswer(fromPeerId, answer) {
+      const conn = connections[fromPeerId];
+      if (!conn) return;
+      if (conn.pc.signalingState === 'have-local-offer')
+        await conn.pc.setRemoteDescription(new RTCSessionDescription(answer));
+    }
+
+    async function handleCandidate(fromPeerId, candidate) {
+      const conn = connections[fromPeerId];
+      if (conn && candidate)
+        await conn.pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+    }
+
+    // ── Build RTCPeerConnection ───────────────────────────────────
+    function buildPeerConnection(remotePeerId, polite) {
+      const pc = new RTCPeerConnection(ICE);
+      const conn = { pc, polite, makingOffer: false };
+      connections[remotePeerId] = conn;
+
+      pc.onnegotiationneeded = async () => {
+        try {
+          conn.makingOffer = true;
+          const offer = await pc.createOffer();
+          if (pc.signalingState !== 'stable') return;
+          await pc.setLocalDescription(offer);
+          send({ type: 'offer', to: remotePeerId, offer: pc.localDescription });
+        } catch (e) { console.error('negotiation error', e); }
+        finally { conn.makingOffer = false; }
+      };
+
+      pc.onicecandidate = ({ candidate }) => {
+        if (candidate) send({ type: 'candidate', to: remotePeerId, candidate });
+      };
+
+      pc.ontrack = ({ streams }) => {
+        if (!streams[0]) return;
+        if (remoteVideos[remotePeerId]) {
+          remoteVideos[remotePeerId].srcObject = streams[0];
+          waitOverlay.style.display = 'none';
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'connected') {
+          waitOverlay.style.display = 'none';
+          setStatus('In call', 'badge badge-call');
+        }
+      };
+
+      updatePeerCount();
+      return conn;
+    }
+
+    function closeConnection(peerId) {
+      connections[peerId]?.pc.close();
+      delete connections[peerId];
+      updatePeerCount();
+    }
+
+    // ── Mic toggle ───────────────────────────────────────────────
+    btnMic.onclick = () => {
+      isMuted = !isMuted;
+      localStream?.getAudioTracks().forEach(t => t.enabled = !isMuted);
+      document.getElementById('micIcon').textContent = isMuted ? '🔇' : '🎤';
+      document.getElementById('micLbl').textContent  = isMuted ? 'Unmute' : 'Mic On';
+      btnMic.classList.toggle('off', isMuted);
+    };
+
+    // ── Camera toggle ────────────────────────────────────────────
+    btnCam.onclick = () => {
+      isCameraOff = !isCameraOff;
+      localStream?.getVideoTracks().forEach(t => t.enabled = !isCameraOff);
+      document.getElementById('camIcon').textContent = isCameraOff ? '📵' : '📷';
+      document.getElementById('camLbl').textContent  = isCameraOff ? 'Cam Off' : 'Cam On';
+      btnCam.classList.toggle('off', isCameraOff);
+    };
+
+    // ── Screen Share ─────────────────────────────────────────────
+    btnScreen.onclick = async () => {
+      if (!isScreenOn) {
+        try {
+          screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+          const screenVid = screenStream.getVideoTracks()[0];
+          const screenAud = screenStream.getAudioTracks()[0];
+
+          for (const { pc } of Object.values(connections)) {
+            const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
+            const audioSender = pc.getSenders().find(s => s.track?.kind === 'audio');
+            if (videoSender) {
+              await videoSender.replaceTrack(screenVid);
+            } else {
+              // User had no camera — add screen track (triggers onnegotiationneeded)
+              pc.addTrack(screenVid, screenStream);
+            }
+            if (audioSender && screenAud) await audioSender.replaceTrack(screenAud);
+          }
+
+          screenVid.onended = stopScreenShare;
+          isScreenOn = true;
+          document.getElementById('screenIcon').textContent = '⏹';
+          document.getElementById('screenLbl').textContent  = 'Stop Sharing';
+          btnScreen.classList.add('on-blue');
+          screenBanner.style.display = 'block';
+        } catch (err) {
+          if (err.name !== 'NotAllowedError') console.error(err);
+        }
+      } else {
+        await stopScreenShare();
+      }
+    };
+
+    async function stopScreenShare() {
+      if (!isScreenOn) return;
+      screenStream?.getTracks().forEach(t => t.stop());
+      screenStream = null;
+      isScreenOn = false;
+
+      const camTrack = localStream?.getVideoTracks()[0];
+      const micTrack = localStream?.getAudioTracks()[0];
+      for (const { pc } of Object.values(connections)) {
+        const vs = pc.getSenders().find(s => s.track?.kind === 'video');
+        const as = pc.getSenders().find(s => s.track?.kind === 'audio');
+        if (vs && camTrack) await vs.replaceTrack(camTrack);
+        if (as && micTrack) await as.replaceTrack(micTrack);
+      }
+
+      document.getElementById('screenIcon').textContent = '🖥';
+      document.getElementById('screenLbl').textContent  = 'Share Screen';
+      btnScreen.classList.remove('on-blue');
+      screenBanner.style.display = 'none';
+    }
+
+    // ── End Call ─────────────────────────────────────────────────
+    btnEnd.onclick = () => {
+      for (const peerId of Object.keys(connections)) closeConnection(peerId);
+      Object.keys(remoteVideos).forEach(removeRemoteTile);
+
+      screenStream?.getTracks().forEach(t => t.stop());
+      localStream?.getTracks().forEach(t => t.stop());
+      screenStream = null; localStream = null;
+      localVideo.srcObject = null;
+      localNoVid.style.display = 'none';
+      isMuted = false; isCameraOff = false; isScreenOn = false;
+
+      ctrlGroup.style.display = 'none';
+      btnJoinCall.disabled    = false;
+      btnJoinCall.style.display = '';
+      document.getElementById('micIcon').textContent = '🎤';
+      document.getElementById('micLbl').textContent  = 'Mic On';
+      document.getElementById('camIcon').textContent = '📷';
+      document.getElementById('camLbl').textContent  = 'Cam On';
+      document.getElementById('screenIcon').textContent = '🖥';
+      document.getElementById('screenLbl').textContent  = 'Share Screen';
+      btnMic.classList.remove('off');
+      btnCam.classList.remove('off');
+      btnScreen.classList.remove('on-blue');
+      screenBanner.style.display = 'none';
+
+      waitMsg.textContent = 'You left the call. Click "Join Call" to rejoin.';
+      waitOverlay.style.display = 'flex';
+      setStatus('Left call', 'badge badge-info');
+    };
+
+    // Click local video to hide/show PiP
+    document.getElementById('localWrap').onclick = () => {
+      const v = document.getElementById('localWrap');
+      v.style.opacity = v.style.opacity === '0' ? '1' : '0';
+    };
+  </script>
+</body>
+</html>
