@@ -144,12 +144,17 @@
       })
       .catch(() => {});
 
+    const ROOM_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
     function roomUrl(roomId) {
-      return `https://${serverHost}/room?session_id=${roomId}`;
+      // Use URLSearchParams to safely encode the room ID — prevents injection
+      const params = new URLSearchParams({ session_id: roomId });
+      return `https://${serverHost}/room?${params}`;
     }
 
     document.getElementById('btnCreate').onclick = async () => {
       const { roomId } = await fetch('/api/new-room').then(r => r.json());
+      if (!ROOM_ID_RE.test(roomId)) return; // server returned unexpected format
       const url = roomUrl(roomId);
 
       document.getElementById('shareLink').textContent = url;
@@ -168,7 +173,8 @@
 
     document.getElementById('btnJoin').onclick = () => {
       const id = document.getElementById('roomInput').value.trim();
-      if (id) location.href = roomUrl(id);
+      // Validate before navigating — only allow safe alphanumeric room IDs
+      if (id && ROOM_ID_RE.test(id)) location.href = roomUrl(id);
     };
 
     document.getElementById('roomInput').onkeydown = (e) => {

@@ -280,10 +280,15 @@
     let isScreenOn  = false;
     let hasVideo    = false;
     let hasAudio    = false;
+    // Null-prototype objects prevent prototype-pollution attacks
     // connections: peerId → { pc, polite, makingOffer }
-    const connections  = {};
+    const connections  = Object.create(null);
     // remote video elements: peerId → <video>
-    const remoteVideos = {};
+    const remoteVideos = Object.create(null);
+
+    // Only accept peer IDs that match the server-generated format (6 hex chars)
+    const PEER_ID_RE = /^[a-f0-9]{6}$/;
+    function isValidPeerId(id) { return PEER_ID_RE.test(id); }
 
     const ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
@@ -380,35 +385,39 @@
           waitMsg.textContent = msg.peers.length === 0
             ? 'Waiting for others to join…'
             : 'Others are here — click "Join Call"';
-          // Connect to every existing peer
           for (const pid of msg.peers) {
+            if (!isValidPeerId(pid)) continue; // skip malformed IDs
             addRemoteTile(pid);
             await initiateConnection(pid);
           }
           break;
 
         case 'peer_joined':
-          // A new peer joined — they will send us an offer, just prepare tile
+          if (!isValidPeerId(msg.peerId)) break;
           addRemoteTile(msg.peerId);
-          setStatus(`Peer joined`, 'badge badge-ready');
+          setStatus('Peer joined', 'badge badge-ready');
           waitMsg.textContent = 'New peer joined — connecting…';
           break;
 
         case 'peer_left':
+          if (!isValidPeerId(msg.peerId)) break;
           removeRemoteTile(msg.peerId);
           closeConnection(msg.peerId);
           showToast('A peer left the room', false);
           break;
 
         case 'offer':
+          if (!isValidPeerId(msg.from)) break;
           await handleRemoteOffer(msg.from, msg.offer);
           break;
 
         case 'answer':
+          if (!isValidPeerId(msg.from)) break;
           await handleRemoteAnswer(msg.from, msg.answer);
           break;
 
         case 'candidate':
+          if (!isValidPeerId(msg.from)) break;
           await handleCandidate(msg.from, msg.candidate);
           break;
 
