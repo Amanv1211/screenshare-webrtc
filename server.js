@@ -1,10 +1,13 @@
 const fs = require('fs');
+const path = require('path');
 const https = require('https');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const WebSocket = require('ws');
 const { networkInterfaces } = require('os');
 const { randomBytes } = require('crypto');
+
+const DIST = path.join(__dirname, 'client', 'dist');
 
 const serverOptions = {
     cert: fs.readFileSync('./app.example.com+3.pem'),
@@ -39,7 +42,10 @@ function allowWsConnection(ip) {
     return true;
 }
 
-// ── Routes (explicit only — no express.static to avoid exposing certs) ──
+// ── Static assets from React build (safe: client/dist never contains .pem files) ──
+app.use('/assets', express.static(path.join(DIST, 'assets')));
+
+// ── Routes ───────────────────────────────────────────────────
 app.get('/api/info', limiterApi, (req, res) => {
     const nets = networkInterfaces();
     let localIp = 'localhost';
@@ -56,8 +62,8 @@ app.get('/api/new-room', limiterNewRoom, (req, res) => {
     res.json({ roomId: randomBytes(3).toString('hex') });
 });
 
-app.get('/', limiterDefault, (req, res) => res.sendFile(__dirname + '/home.html'));
-app.get('/room', limiterDefault, (req, res) => res.sendFile(__dirname + '/room.html'));
+app.get('/', limiterDefault, (req, res) => res.sendFile(path.join(DIST, 'index.html')));
+app.get('/room', limiterDefault, (req, res) => res.sendFile(path.join(DIST, 'index.html')));
 
 // ── WebSocket signaling ──────────────────────────────────────
 const httpsServer = https.createServer(serverOptions, app);
