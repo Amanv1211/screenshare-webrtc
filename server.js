@@ -11,9 +11,57 @@ const serverOptions = {
 };
 
 const app = express();
-app.use(express.static('.', { index: false }));
 
-app.get('/api/info', (req, res) => {
+// ── Rate limiting (no external dependency) ───────────────────
+const ipLog = new Map();
+// Clean up stale entries every 5 minutes
+setInterval(() => {
+    const cutoff = Date.now() - 60_000;
+    for (const [ip, entry] of ipLog) {
+        if (entry.windowStart < cutoff) ipLog.delete(ip);
+    }
+}, 5 * 60_000);
+
+function rateLimit(maxPerMinute) {
+    return (req, res, next) => {
+        const ip = req.ip || req.socket.remoteAddress || 'unknown';
+        const now = Date.now();
+        const entry = ipLog.get(ip);
+        if (!entry || now - entry.windowStart > 60_000) {
+            ipLog.set(ip, { windowStart: now, count: 1 });
+            return next();
+        }
+        if (entry.count >= maxPerMinute) {
+            return res.status(429).json({ error: 'Too many requests' });
+        }
+        entry.count++;
+        next();
+    };
+}
+
+// WebSocket connection rate limiting
+const wsLog = new Map();
+setInterval(() => {
+    const cutoff = Date.now() - 60_000;
+    for (const [ip, entry] of wsLog) {
+        if (entry.windowStart < cutoff) wsLog.delete(ip);
+    }
+}, 5 * 60_000);
+
+function allowWsConnection(ip) {
+    const now = Date.now();
+    const entry = wsLog.get(ip);
+    if (!entry || now - entry.windowStart > 60_000) {
+        wsLog.set(ip, { windowStart: now, count: 1 });
+        return true;
+    }
+    if (entry.count >= 20) return false; // 20 WS connections per IP per minute
+    entry.count++;
+    return true;
+}
+
+// ── Routes (explicit only — no express.static to avoid exposing certs) ──
+app.get('/api/info', rateLimit(30), (req, res) => {
     const nets = networkInterfaces();
     let localIp = 'localhost';
     for (const iface of Object.values(nets)) {
@@ -25,24 +73,37 @@ app.get('/api/info', (req, res) => {
     res.json({ localIp, port: 3000 });
 });
 
-app.get('/api/new-room', (req, res) => {
+app.get('/api/new-room', rateLimit(10), (req, res) => {
     res.json({ roomId: randomBytes(3).toString('hex') });
 });
 
-app.get('/', (req, res) => res.sendFile(__dirname + '/home.html'));
-app.get('/room', (req, res) => res.sendFile(__dirname + '/room.html'));
+app.get('/', rateLimit(60), (req, res) => res.sendFile(__dirname + '/home.html'));
+app.get('/room', rateLimit(60), (req, res) => res.sendFile(__dirname + '/room.html'));
 
+// ── WebSocket signaling ──────────────────────────────────────
 const httpsServer = https.createServer(serverOptions, app);
 const wss = new WebSocket.Server({ server: httpsServer });
 
-// sessions = { sessionId: [ { ws, peerId } ] }
-const sessions = {};
+const sessions = Object.create(null); // null prototype prevents prototype pollution
 const MAX_PEERS = 5;
+const PEER_ID_RE = /^[a-f0-9]{6}$/;
+const SESSION_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 wss.on('connection', (ws, req) => {
+    const ip = req.socket.remoteAddress || 'unknown';
+
+    if (!allowWsConnection(ip)) {
+        ws.close(1008, 'Rate limit exceeded');
+        return;
+    }
+
     const params = new URLSearchParams(req.url.split('?')[1]);
     const sessionId = params.get('session_id');
-    if (!sessionId) { ws.close(); return; }
+
+    if (!sessionId || !SESSION_ID_RE.test(sessionId)) {
+        ws.close(1008, 'Invalid session ID');
+        return;
+    }
 
     if (!sessions[sessionId]) sessions[sessionId] = [];
 
@@ -55,13 +116,11 @@ wss.on('connection', (ws, req) => {
     const peerId = randomBytes(3).toString('hex');
     sessions[sessionId].push({ ws, peerId });
 
-    // Tell new peer their ID + list of existing peer IDs
     const existingPeers = sessions[sessionId]
         .filter(p => p.peerId !== peerId)
         .map(p => p.peerId);
     ws.send(JSON.stringify({ type: 'init', peerId, peers: existingPeers }));
 
-    // Notify existing peers
     sessions[sessionId].forEach(p => {
         if (p.peerId !== peerId && p.ws.readyState === WebSocket.OPEN)
             p.ws.send(JSON.stringify({ type: 'peer_joined', peerId }));
@@ -73,13 +132,13 @@ wss.on('connection', (ws, req) => {
         let data;
         try { data = JSON.parse(message); } catch { return; }
 
-        if (data.to) {
-            // Route to a specific peer
+        // Validate the `to` field if present — must be a known peer in this session
+        if (data.to !== undefined) {
+            if (!PEER_ID_RE.test(data.to)) return; // drop malformed target
             const target = sessions[sessionId]?.find(p => p.peerId === data.to);
             if (target?.ws.readyState === WebSocket.OPEN)
                 target.ws.send(JSON.stringify({ ...data, from: peerId }));
         } else {
-            // Broadcast to all others
             sessions[sessionId]?.forEach(p => {
                 if (p.peerId !== peerId && p.ws.readyState === WebSocket.OPEN)
                     p.ws.send(JSON.stringify({ ...data, from: peerId }));
@@ -98,13 +157,6 @@ wss.on('connection', (ws, req) => {
         console.log(`[${sessionId}] peer ${peerId} left`);
     });
 });
-
-function broadcast(sessionId, senderPeerId, data) {
-    (sessions[sessionId] || []).forEach(p => {
-        if (p.peerId !== senderPeerId && p.ws.readyState === WebSocket.OPEN)
-            p.ws.send(JSON.stringify(data));
-    });
-}
 
 httpsServer.listen(3000, '0.0.0.0', () => {
     console.log('Server running → https://localhost:3000');
